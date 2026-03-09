@@ -3,15 +3,38 @@ use tokio::runtime::Runtime;
 use std::time::Duration;
 use fuse::cache::{CacheManager, RemoteStorage};
 use fuse::db::MetadataDb;
+use fuse::crypto;
 use fuse::fs::EncryptedFs;
 use fuse::types::BlockId;
 
 struct DummyRemoteStorage;
 
 impl RemoteStorage for DummyRemoteStorage {
-    fn upload(&self, _block_id: &BlockId, _data: Vec<u8>) -> std::pin::Pin<Box<dyn std::future::Future<Output = fuse::error::Result<String>> + Send>> {
+    fn upload(&self, _block_id: &BlockId, data: Vec<u8>) -> std::pin::Pin<Box<dyn std::future::Future<Output = fuse::error::Result<String>> + Send>> {
+        let block_id = _block_id.clone();
         Box::pin(async move {
+            println!("DummyRemote: Receiving block {:?} - Final encrypted size on wire: {} bytes", block_id, data.len());
             Ok("dummy_remote_id".to_string())
+        })
+    }
+}
+
+struct EncryptedRemoteStorage {
+    inner: Arc<dyn RemoteStorage>,
+    key: [u8; 32],
+}
+
+impl RemoteStorage for EncryptedRemoteStorage {
+    fn upload(&self, block_id: &BlockId, data: Vec<u8>) -> std::pin::Pin<Box<dyn std::future::Future<Output = fuse::error::Result<String>> + Send>> {
+        let key = self.key;
+        let inner = self.inner.clone();
+        let block_id = block_id.clone();
+        Box::pin(async move {
+            let ciphertext = tokio::task::spawn_blocking(move || {
+                crypto::encrypt_block(&key, &data)
+            }).await.map_err(|e| fuse::error::FuseError::Crypto(format!("Spawn error: {}", e)))??;
+
+            inner.upload(&block_id, ciphertext).await
         })
     }
 }
@@ -49,8 +72,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rt = Runtime::new()?;
     let handle = rt.handle().clone();
 
+    // Setup the crypto interceptor pipeline
+    let dummy_remote = Arc::new(DummyRemoteStorage);
+    let mut key = [0u8; 32];
+    key.copy_from_slice(b"strong_test_password_32_bytes_!!"); // Derived in real environment
+    let remote = Arc::new(EncryptedRemoteStorage {
+        inner: dummy_remote,
+        key,
+    });
+
     // 64 blocks max, 30s TTL
-    let remote = Arc::new(DummyRemoteStorage);
     let cache = Arc::new(CacheManager::new(64, Duration::from_secs(30), remote));
 
     // Start block flush daemon
