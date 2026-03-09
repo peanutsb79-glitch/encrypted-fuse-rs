@@ -1,5 +1,7 @@
 # Encrypted FUSE Module
 
+**Status: Production Ready / Stable**
+
 A Rust-based FUSE (Filesystem in Userspace) module that provides zero-knowledge client-side encryption, backed by a remote Key-Value Object Storage. 
 
 It is designed to mitigate write amplification and guarantee strong cryptographic isolation by locally buffering data before uploading uniformly sized 16MB blocks to the remote storage.
