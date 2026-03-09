@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if db.get_inode(1)?.is_none() {
         let root_inode = fuse::types::InodeMetadata {
             ino: 1,
-            mode: libc::S_IFDIR | 0o755,
+            mode: libc::S_IFDIR as u32 | 0o755,
             uid: unsafe { libc::getuid() },
             gid: unsafe { libc::getgid() },
             size: 4096,
@@ -57,13 +57,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let daemon_handle = cache.clone().spawn_daemon(&handle);
 
     println!("Mounting FUSE filesystem at {}...", mount_point);
-    let fs = EncryptedFs::new(db, cache, handle);
+    let fs = EncryptedFs::new(db.clone(), cache, handle);
 
     let options = vec![
         fuser::MountOption::FSName("encrypted_fuse".to_string()),
+        fuser::MountOption::RW,
     ];
 
     fuser::mount2(fs, mount_point, &options)?;
+
+    println!("FUSE Unmounted. Encrypting metadata database...");
+    let password = b"strong_test_password_32_bytes_!!"; 
+    match db.export_encrypted(password, "metadata.db.enc") {
+        Ok(_) => println!("✅ Metadata database encrypted successfully at metadata.db.enc"),
+        Err(e) => eprintln!("❌ Failed to encrypt metadata database: {:?}", e),
+    }
 
     drop(daemon_handle);
     Ok(())
